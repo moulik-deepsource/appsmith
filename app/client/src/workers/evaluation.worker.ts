@@ -61,8 +61,14 @@ ctx.addEventListener("message", e => {
       const response = getEvaluatedDataTree(dataTree);
       // We need to clean it to remove any possible functions inside the tree.
       // If functions exist, it will crash the web worker
-      const cleanDataTree = JSON.stringify(response);
-      ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+      try {
+        const cleanDataTree = JSON.stringify(response);
+        ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+      } catch (e) {
+        const cleanDataTree = JSON.stringify(getValidatedTree(dataTree));
+        ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+      }
+
       ERRORS = [];
       break;
     }
