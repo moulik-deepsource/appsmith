@@ -51,9 +51,16 @@ const ctx: Worker = self as any;
 let ERRORS: EvalError[] = [];
 let WIDGET_TYPE_CONFIG_MAP: WidgetTypeConfigMap = {};
 
+// Todo: find a better name
+function postMessageWrapper(action: keyof EVAL_WORKER_ACTIONS) {
+  return (message: any) => {
+    ctx.postMessage({ action, message });
+  };
+}
+
 ctx.addEventListener("message", e => {
   const { action, ...rest } = e.data;
-
+  const postMessage = postMessageWrapper(action);
   switch (action as EVAL_WORKER_ACTIONS) {
     case EVAL_WORKER_ACTIONS.EVAL_TREE: {
       const { widgetTypeConfigMap, dataTree } = rest;
@@ -62,7 +69,7 @@ ctx.addEventListener("message", e => {
       // We need to clean it to remove any possible functions inside the tree.
       // If functions exist, it will crash the web worker
       const cleanDataTree = JSON.stringify(response);
-      ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+      postMessage({ dataTree: cleanDataTree, errors: ERRORS });
       ERRORS = [];
       break;
     }
@@ -71,7 +78,7 @@ ctx.addEventListener("message", e => {
       const withFunctions = addFunctions(dataTree);
       const value = getDynamicValue(binding, withFunctions, false);
       const cleanedResponse = removeFunctions(value);
-      ctx.postMessage({ value: cleanedResponse, errors: ERRORS });
+      postMessage({ value: cleanedResponse, errors: ERRORS });
       ERRORS = [];
       break;
     }
@@ -86,32 +93,32 @@ ctx.addEventListener("message", e => {
         callbackData,
       );
       const cleanedResponse = removeFunctions(triggers);
-      ctx.postMessage({ triggers: cleanedResponse, errors: ERRORS });
+      postMessage({ triggers: cleanedResponse, errors: ERRORS });
       ERRORS = [];
       break;
     }
     case EVAL_WORKER_ACTIONS.CLEAR_CACHE: {
       clearCaches();
-      ctx.postMessage(true);
+      postMessage(true);
       break;
     }
     case EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE: {
       const { propertyPath } = rest;
       clearPropertyCache(propertyPath);
-      ctx.postMessage(true);
+      postMessage(true);
       break;
     }
     case EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE_OF_WIDGET: {
       const { widgetName } = rest;
       clearPropertyCacheOfWidget(widgetName);
-      ctx.postMessage(true);
+      postMessage(true);
       break;
     }
     case EVAL_WORKER_ACTIONS.VALIDATE_PROPERTY: {
       const { widgetType, property, value, props } = rest;
       const result = validateWidgetProperty(widgetType, property, value, props);
       const cleanedResponse = removeFunctions(result);
-      ctx.postMessage(cleanedResponse);
+      postMessage(cleanedResponse);
       break;
     }
     default: {
