@@ -55,13 +55,19 @@ const worker = new (class WorkerBroker {
     this._broker = this._broker.bind(this);
   }
 
+  *reset() {
+    if (!this._evaluationWorker) return;
+
+    this._evaluationWorker.terminate();
+    this._evaluationWorker = undefined;
+    this._workerChannel?.close();
+    yield cancel(this._cancelBroker);
+  }
+
   *init() {
-    // Todo: ask where this is used.
-    if (this._evaluationWorker) {
-      this._evaluationWorker.terminate();
-      this._evaluationWorker = undefined;
-      cancel(this._cancelBroker);
-    }
+    // Todo: call this on editor unmount
+    this.reset();
+
     widgetTypeConfigMap = WidgetFactory.getWidgetTypeConfigMap();
     this._evaluationWorker = new Worker();
     this._workerChannel = eventChannel(emitter => {
@@ -77,7 +83,6 @@ const worker = new (class WorkerBroker {
       };
     });
 
-    // Todo: figure out how to make this repeatable
     this._cancelBroker = yield takeEvery(this._workerChannel, this._broker);
   }
 
@@ -86,6 +91,7 @@ const worker = new (class WorkerBroker {
   }
 
   *request(action: string, payload = {}) {
+    // block till worker.isReady
     // Todo: should I raise here?
     if (!this._evaluationWorker) return;
 
