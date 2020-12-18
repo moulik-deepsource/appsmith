@@ -52,15 +52,18 @@ let ERRORS: EvalError[] = [];
 let WIDGET_TYPE_CONFIG_MAP: WidgetTypeConfigMap = {};
 
 // Todo: find a better name
-function postMessageWrapper(action: keyof EVAL_WORKER_ACTIONS) {
+function postMessageWrapper(
+  action: keyof EVAL_WORKER_ACTIONS,
+  requestId: string,
+) {
   return (payload: any) => {
-    ctx.postMessage({ action, payload });
+    ctx.postMessage({ action, requestId, payload });
   };
 }
 
 ctx.addEventListener("message", e => {
-  const { action, payload } = e.data;
-  const postMessage = postMessageWrapper(action);
+  const { action, requestId, payload } = e.data;
+  const postMessage = postMessageWrapper(action, requestId);
   switch (action as EVAL_WORKER_ACTIONS) {
     case EVAL_WORKER_ACTIONS.EVAL_TREE: {
       const { widgetTypeConfigMap, dataTree } = payload;

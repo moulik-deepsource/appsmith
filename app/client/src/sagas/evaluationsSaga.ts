@@ -1,6 +1,7 @@
 import {
   all,
   call,
+  cancel,
   fork,
   put,
   select,
@@ -40,9 +41,12 @@ import { EXECUTION_PARAM_KEY } from "../constants/ActionConstants";
 
 let widgetTypeConfigMap: WidgetTypeConfigMap;
 const worker = new (class WorkerBroker {
-  private _channels: { [k: string]: Channel<any> } = {};
+  private _channels: {
+    [action: string]: { [requestId: string]: Channel<any> };
+  } = {};
   private _workerChannel: EventChannel<any> | undefined;
   private _evaluationWorker: Worker | undefined;
+  private _cancelBroker: any;
 
   constructor() {
     this.init = this.init.bind(this);
@@ -56,6 +60,7 @@ const worker = new (class WorkerBroker {
     if (this._evaluationWorker) {
       this._evaluationWorker.terminate();
       this._evaluationWorker = undefined;
+      cancel(this._cancelBroker);
     }
     widgetTypeConfigMap = WidgetFactory.getWidgetTypeConfigMap();
     this._evaluationWorker = new Worker();
@@ -72,12 +77,8 @@ const worker = new (class WorkerBroker {
       };
     });
 
-    const evalWorkerActions = Object.values(EVAL_WORKER_ACTIONS);
-    for (const action of evalWorkerActions) {
-      this._channels[action] = yield call(channel);
-    }
     // Todo: figure out how to make this repeatable
-    yield takeEvery(this._workerChannel, this._broker);
+    this._cancelBroker = yield takeEvery(this._workerChannel, this._broker);
   }
 
   isReady() {
@@ -88,20 +89,30 @@ const worker = new (class WorkerBroker {
     // Todo: should I raise here?
     if (!this._evaluationWorker) return;
 
+    if (!(action in this._channels)) {
+      this._channels[action] = {};
+    }
+    const requestId = _.uniqueId();
+
+    this._channels[action][requestId] = yield call(channel);
+
     this._evaluationWorker.postMessage({
       action,
       payload,
+      requestId,
     });
 
-    return yield take(this._channels[action]);
+    const response = yield take(this._channels[action][requestId]);
+    delete this._channels[action][requestId];
+    return response;
   }
 
   private *_broker(event: MessageEvent) {
     if (!event || !event.data) {
       return;
     }
-    const { action, payload } = event.data;
-    yield put(this._channels[action], payload);
+    const { action, requestId, payload } = event.data;
+    yield put(this._channels[action][requestId], payload);
   }
 })();
 
