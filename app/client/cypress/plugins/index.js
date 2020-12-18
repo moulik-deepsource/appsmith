@@ -24,12 +24,14 @@ const cypressLogToOutput = require("cypress-log-to-output");
  */
 module.exports = (on, config) => {
   // Todo: maybe raise a PR instead of overwriting `on("before:browser:launch", ...)` twice.
-  cypressLogToOutput.install(on, (type, event) => {
-    if (event.level === "error" || event.type === "error") {
-      return true;
-    }
-    return false;
-  });
+
+  // cypressLogToOutput.install(on, (type, event) => {
+  //   if (event.level === "error" || event.type === "error") {
+  //     return true;
+  //   }
+  //   return false;
+  // });
+
   // `on` is used to hook into various events Cypress emits
   // `config` is the resolved Cypress config
   on("before:browser:launch", (browser = {}, launchOptions) => {
@@ -37,10 +39,10 @@ module.exports = (on, config) => {
       Uncomment below to get console log printed in cypress output
     */
 
-    launchOptions.args = cypressLogToOutput.browserLaunchHandler(
-      browser,
-      launchOptions.args,
-    );
+    // launchOptions.args = cypressLogToOutput.browserLaunchHandler(
+    //   browser,
+    //   launchOptions.args,
+    // );
     if (browser.name === "chrome") {
       launchOptions.args.push("--disable-dev-shm-usage");
       return launchOptions;
