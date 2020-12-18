@@ -53,17 +53,17 @@ let WIDGET_TYPE_CONFIG_MAP: WidgetTypeConfigMap = {};
 
 // Todo: find a better name
 function postMessageWrapper(action: keyof EVAL_WORKER_ACTIONS) {
-  return (message: any) => {
-    ctx.postMessage({ action, message });
+  return (payload: any) => {
+    ctx.postMessage({ action, payload });
   };
 }
 
 ctx.addEventListener("message", e => {
-  const { action, ...rest } = e.data;
+  const { action, payload } = e.data;
   const postMessage = postMessageWrapper(action);
   switch (action as EVAL_WORKER_ACTIONS) {
     case EVAL_WORKER_ACTIONS.EVAL_TREE: {
-      const { widgetTypeConfigMap, dataTree } = rest;
+      const { widgetTypeConfigMap, dataTree } = payload;
       WIDGET_TYPE_CONFIG_MAP = widgetTypeConfigMap;
       const response = getEvaluatedDataTree(dataTree);
       // We need to clean it to remove any possible functions inside the tree.
@@ -74,7 +74,7 @@ ctx.addEventListener("message", e => {
       break;
     }
     case EVAL_WORKER_ACTIONS.EVAL_SINGLE: {
-      const { binding, dataTree } = rest;
+      const { binding, dataTree } = payload;
       const withFunctions = addFunctions(dataTree);
       const value = getDynamicValue(binding, withFunctions, false);
       const cleanedResponse = removeFunctions(value);
@@ -83,7 +83,7 @@ ctx.addEventListener("message", e => {
       break;
     }
     case EVAL_WORKER_ACTIONS.EVAL_TRIGGER: {
-      const { dynamicTrigger, callbackData, dataTree } = rest;
+      const { dynamicTrigger, callbackData, dataTree } = payload;
       const evalTree = getEvaluatedDataTree(dataTree);
       const withFunctions = addFunctions(evalTree);
       const triggers = getDynamicValue(
@@ -103,19 +103,19 @@ ctx.addEventListener("message", e => {
       break;
     }
     case EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE: {
-      const { propertyPath } = rest;
+      const { propertyPath } = payload;
       clearPropertyCache(propertyPath);
       postMessage(true);
       break;
     }
     case EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE_OF_WIDGET: {
-      const { widgetName } = rest;
+      const { widgetName } = payload;
       clearPropertyCacheOfWidget(widgetName);
       postMessage(true);
       break;
     }
     case EVAL_WORKER_ACTIONS.VALIDATE_PROPERTY: {
-      const { widgetType, property, value, props } = rest;
+      const { widgetType, property, value, props } = payload;
       const result = validateWidgetProperty(widgetType, property, value, props);
       const cleanedResponse = removeFunctions(result);
       postMessage(cleanedResponse);

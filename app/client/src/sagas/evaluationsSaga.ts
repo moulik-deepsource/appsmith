@@ -90,7 +90,7 @@ const worker = new (class WorkerBroker {
 
     this._evaluationWorker.postMessage({
       action,
-      ...payload,
+      payload,
     });
 
     return yield take(this._channels[action]);
@@ -100,8 +100,8 @@ const worker = new (class WorkerBroker {
     if (!event || !event.data) {
       return;
     }
-    const { action, message } = event.data;
-    yield put(this._channels[action], message);
+    const { action, payload } = event.data;
+    yield put(this._channels[action], payload);
   }
 })();
 
