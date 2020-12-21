@@ -50,6 +50,7 @@ const ctx: Worker = self as any;
 
 let ERRORS: EvalError[] = [];
 let WIDGET_TYPE_CONFIG_MAP: WidgetTypeConfigMap = {};
+let oldEvalTree = "";
 
 ctx.addEventListener("message", e => {
   const { action, ...rest } = e.data;
@@ -64,9 +65,14 @@ ctx.addEventListener("message", e => {
       try {
         const cleanDataTree = JSON.stringify(response);
         ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+        oldEvalTree = cleanDataTree;
       } catch (e) {
-        const cleanDataTree = JSON.stringify(getValidatedTree(dataTree));
-        ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+        if (oldEvalTree.length === 0) {
+          const cleanDataTree = JSON.stringify(getValidatedTree(dataTree));
+          ctx.postMessage({ dataTree: cleanDataTree, errors: ERRORS });
+        } else {
+          ctx.postMessage({ dataTree: oldEvalTree, errors: ERRORS });
+        }
       }
 
       ERRORS = [];
@@ -1099,6 +1105,7 @@ const clearCaches = () => {
   dynamicPropValueCache.clear();
   dependencyCache.clear();
   parsedValueCache.clear();
+  oldEvalTree = "";
 };
 
 const VALIDATORS: Record<ValidationType, Validator> = {
