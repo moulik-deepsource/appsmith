@@ -9,7 +9,7 @@ import {
   takeEvery,
   takeLatest,
 } from "redux-saga/effects";
-import { eventChannel, EventChannel, channel, Channel } from "redux-saga";
+import { eventChannel, EventChannel, channel, Channel, END } from "redux-saga";
 import {
   EvaluationReduxAction,
   ReduxAction,
@@ -40,41 +40,44 @@ import * as Sentry from "@sentry/react";
 import { EXECUTION_PARAM_KEY } from "../constants/ActionConstants";
 
 let widgetTypeConfigMap: WidgetTypeConfigMap;
-const worker = new (class WorkerBroker {
+const worker = new (class {
   private _channels: {
     [action: string]: { [requestId: string]: Channel<any> };
   } = {};
   private _workerChannel: EventChannel<any> | undefined;
   private _evaluationWorker: Worker | undefined;
   private _cancelBroker: any;
+  private _readyChan: Channel<any>;
 
   constructor() {
     this.init = this.init.bind(this);
     this.request = this.request.bind(this);
-    this.isReady = this.isReady.bind(this);
     this._broker = this._broker.bind(this);
+    this._readyChan = channel();
   }
 
   *reset() {
     if (!this._evaluationWorker) return;
-
     this._evaluationWorker.terminate();
     this._evaluationWorker = undefined;
-    this._workerChannel?.close();
+    yield this._workerChannel?.close();
     yield cancel(this._cancelBroker);
   }
 
   *init() {
-    // Todo: call this on editor unmount
-    this.reset();
+    // Todo: call this on editor unmount as part of a separate PR
+    yield this.reset();
 
     widgetTypeConfigMap = WidgetFactory.getWidgetTypeConfigMap();
     this._evaluationWorker = new Worker();
     this._workerChannel = eventChannel(emitter => {
       if (!this._evaluationWorker) {
-        // Todo: figure how to handle this.
+        // Impossible case unless something really went wrong
+        // END the channel in that case
+        emitter(END);
         return _.noop;
       }
+
       this._evaluationWorker.addEventListener("message", emitter);
       // The subscriber must return an unsubscribe function
       return () => {
@@ -84,16 +87,17 @@ const worker = new (class WorkerBroker {
     });
 
     this._cancelBroker = yield takeEvery(this._workerChannel, this._broker);
-  }
-
-  isReady() {
-    return !!this._evaluationWorker;
+    // Inform all waiters that we can move forward
+    yield put(this._readyChan, true);
   }
 
   *request(action: string, payload = {}) {
-    // block till worker.isReady
-    // Todo: should I raise here?
-    if (!this._evaluationWorker) return;
+    if (!this._evaluationWorker) {
+      // Block request till we are ready.
+      yield take(this._readyChan);
+      // Impossible case, but helps avoid `?` later in code and makes it clearer.
+      if (!this._evaluationWorker) return;
+    }
 
     if (!(action in this._channels)) {
       this._channels[action] = {};
@@ -109,6 +113,8 @@ const worker = new (class WorkerBroker {
     });
 
     const response = yield take(this._channels[action][requestId]);
+    yield this._channels[action][requestId].close();
+
     delete this._channels[action][requestId];
     return response;
   }
@@ -180,59 +186,49 @@ export function* evaluateSingleValue(
   binding: string,
   executionParams: Record<string, any> = {},
 ) {
-  if (worker.isReady()) {
-    const dataTree = yield select(getDataTree);
+  const dataTree = yield select(getDataTree);
 
-    const workerResponse = yield worker.request(
-      EVAL_WORKER_ACTIONS.EVAL_SINGLE,
-      {
-        dataTree: Object.assign({}, dataTree, {
-          [EXECUTION_PARAM_KEY]: executionParams,
-        }),
-        binding,
-      },
-    );
+  const workerResponse = yield worker.request(EVAL_WORKER_ACTIONS.EVAL_SINGLE, {
+    dataTree: Object.assign({}, dataTree, {
+      [EXECUTION_PARAM_KEY]: executionParams,
+    }),
+    binding,
+  });
 
-    const { errors, value } = workerResponse;
+  const { errors, value } = workerResponse;
 
-    evalErrorHandler(errors);
-    return value;
-  }
+  evalErrorHandler(errors);
+  return value;
 }
 
 export function* evaluateDynamicTrigger(
   dynamicTrigger: string,
   callbackData?: Array<any>,
 ) {
-  if (worker.isReady()) {
-    const unEvalTree = yield select(getUnevaluatedDataTree);
+  const unEvalTree = yield select(getUnevaluatedDataTree);
 
-    const workerResponse = yield worker.request(
-      EVAL_WORKER_ACTIONS.EVAL_TRIGGER,
-      { dataTree: unEvalTree, dynamicTrigger, callbackData },
-    );
+  const workerResponse = yield worker.request(
+    EVAL_WORKER_ACTIONS.EVAL_TRIGGER,
+    { dataTree: unEvalTree, dynamicTrigger, callbackData },
+  );
 
-    const { errors, triggers } = workerResponse;
-    evalErrorHandler(errors);
-    return triggers;
-  }
+  const { errors, triggers } = workerResponse;
+  evalErrorHandler(errors);
+  return triggers;
+
   return [];
 }
 
 export function* clearEvalCache() {
-  if (worker.isReady()) {
-    yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_CACHE);
+  yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_CACHE);
 
-    return true;
-  }
+  return true;
 }
 
 export function* clearEvalPropertyCache(propertyPath: string) {
-  if (worker.isReady()) {
-    yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE, {
-      propertyPath,
-    });
-  }
+  yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE, {
+    propertyPath,
+  });
 }
 
 /**
@@ -241,11 +237,9 @@ export function* clearEvalPropertyCache(propertyPath: string) {
  * @param widgetName
  */
 export function* clearEvalPropertyCacheOfWidget(widgetName: string) {
-  if (worker.isReady()) {
-    yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE_OF_WIDGET, {
-      widgetName,
-    });
-  }
+  yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE_OF_WIDGET, {
+    widgetName,
+  });
 }
 
 export function* validateProperty(
@@ -254,15 +248,12 @@ export function* validateProperty(
   value: any,
   props: WidgetProps,
 ) {
-  if (worker.isReady()) {
-    return yield worker.request(EVAL_WORKER_ACTIONS.VALIDATE_PROPERTY, {
-      widgetType,
-      property,
-      value,
-      props,
-    });
-  }
-  return { isValid: true, parsed: value };
+  return yield worker.request(EVAL_WORKER_ACTIONS.VALIDATE_PROPERTY, {
+    widgetType,
+    property,
+    value,
+    props,
+  });
 }
 
 const EVALUATE_REDUX_ACTIONS = [
