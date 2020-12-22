@@ -20,8 +20,10 @@ class MockWorker {
     expect(msgType).toEqual(MessageType);
     this.callback = callback;
   }
+
   removeEventListener(msgType: string, callback: CallableFunction) {
     expect(msgType).toEqual(MessageType);
+    expect(callback).toEqual(this.callback);
     this.callback = this.noop;
   }
 
