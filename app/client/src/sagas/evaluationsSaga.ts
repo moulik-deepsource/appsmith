@@ -9,7 +9,7 @@ import {
   takeEvery,
   takeLatest,
 } from "redux-saga/effects";
-import { eventChannel, EventChannel, channel, Channel, END } from "redux-saga";
+
 import {
   EvaluationReduxAction,
   ReduxAction,
@@ -21,6 +21,7 @@ import {
   getUnevaluatedDataTree,
 } from "selectors/dataTreeSelectors";
 import WidgetFactory, { WidgetTypeConfigMap } from "../utils/WidgetFactory";
+import { GracefulWorker } from "../utils/WorkerUtil";
 import Worker from "worker-loader!../workers/evaluation.worker";
 import {
   EVAL_WORKER_ACTIONS,
@@ -40,93 +41,8 @@ import * as Sentry from "@sentry/react";
 import { EXECUTION_PARAM_KEY } from "../constants/ActionConstants";
 
 let widgetTypeConfigMap: WidgetTypeConfigMap;
-const worker = new (class {
-  private _channels: {
-    [action: string]: { [requestId: string]: Channel<any> };
-  } = {};
-  private _workerChannel: EventChannel<any> | undefined;
-  private _evaluationWorker: Worker | undefined;
-  private _cancelBroker: any;
-  private _readyChan: Channel<any>;
 
-  constructor() {
-    this.init = this.init.bind(this);
-    this.request = this.request.bind(this);
-    this._broker = this._broker.bind(this);
-    this._readyChan = channel();
-  }
-
-  *reset() {
-    if (!this._evaluationWorker) return;
-    this._evaluationWorker.terminate();
-    this._evaluationWorker = undefined;
-    yield this._workerChannel?.close();
-    yield cancel(this._cancelBroker);
-  }
-
-  *init() {
-    // Todo: call this on editor unmount as part of a separate PR
-    yield this.reset();
-
-    widgetTypeConfigMap = WidgetFactory.getWidgetTypeConfigMap();
-    this._evaluationWorker = new Worker();
-    this._workerChannel = eventChannel(emitter => {
-      if (!this._evaluationWorker) {
-        // Impossible case unless something really went wrong
-        // END the channel in that case
-        emitter(END);
-        return _.noop;
-      }
-
-      this._evaluationWorker.addEventListener("message", emitter);
-      // The subscriber must return an unsubscribe function
-      return () => {
-        if (!this._evaluationWorker) return;
-        this._evaluationWorker.removeEventListener("message", emitter);
-      };
-    });
-
-    this._cancelBroker = yield takeEvery(this._workerChannel, this._broker);
-    // Inform all waiters that we can move forward
-    yield put(this._readyChan, true);
-  }
-
-  *request(action: string, payload = {}) {
-    if (!this._evaluationWorker) {
-      // Block request till we are ready.
-      yield take(this._readyChan);
-      // Impossible case, but helps avoid `?` later in code and makes it clearer.
-      if (!this._evaluationWorker) return;
-    }
-
-    if (!(action in this._channels)) {
-      this._channels[action] = {};
-    }
-    const requestId = _.uniqueId();
-
-    this._channels[action][requestId] = yield call(channel);
-
-    this._evaluationWorker.postMessage({
-      action,
-      payload,
-      requestId,
-    });
-
-    const response = yield take(this._channels[action][requestId]);
-    yield this._channels[action][requestId].close();
-
-    delete this._channels[action][requestId];
-    return response;
-  }
-
-  private *_broker(event: MessageEvent) {
-    if (!event || !event.data) {
-      return;
-    }
-    const { action, requestId, payload } = event.data;
-    yield put(this._channels[action][requestId], payload);
-  }
-})();
+const worker = new GracefulWorker(Worker);
 
 const evalErrorHandler = (errors: EvalError[]) => {
   if (!errors) return;
@@ -161,10 +77,14 @@ function* evaluateTreeSaga(postEvalActions?: ReduxAction<unknown>[]) {
   const unEvalTree = yield select(getUnevaluatedDataTree);
   log.debug({ unEvalTree });
 
-  const workerResponse = yield worker.request(EVAL_WORKER_ACTIONS.EVAL_TREE, {
-    dataTree: unEvalTree,
-    widgetTypeConfigMap,
-  });
+  const workerResponse = yield call(
+    worker.request,
+    EVAL_WORKER_ACTIONS.EVAL_TREE,
+    {
+      dataTree: unEvalTree,
+      widgetTypeConfigMap,
+    },
+  );
 
   const { errors, dataTree } = workerResponse;
   const parsedDataTree = JSON.parse(dataTree);
@@ -188,12 +108,16 @@ export function* evaluateSingleValue(
 ) {
   const dataTree = yield select(getDataTree);
 
-  const workerResponse = yield worker.request(EVAL_WORKER_ACTIONS.EVAL_SINGLE, {
-    dataTree: Object.assign({}, dataTree, {
-      [EXECUTION_PARAM_KEY]: executionParams,
-    }),
-    binding,
-  });
+  const workerResponse = yield call(
+    worker.request,
+    EVAL_WORKER_ACTIONS.EVAL_SINGLE,
+    {
+      dataTree: Object.assign({}, dataTree, {
+        [EXECUTION_PARAM_KEY]: executionParams,
+      }),
+      binding,
+    },
+  );
 
   const { errors, value } = workerResponse;
 
@@ -207,7 +131,8 @@ export function* evaluateDynamicTrigger(
 ) {
   const unEvalTree = yield select(getUnevaluatedDataTree);
 
-  const workerResponse = yield worker.request(
+  const workerResponse = yield call(
+    worker.request,
     EVAL_WORKER_ACTIONS.EVAL_TRIGGER,
     { dataTree: unEvalTree, dynamicTrigger, callbackData },
   );
@@ -215,18 +140,16 @@ export function* evaluateDynamicTrigger(
   const { errors, triggers } = workerResponse;
   evalErrorHandler(errors);
   return triggers;
-
-  return [];
 }
 
 export function* clearEvalCache() {
-  yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_CACHE);
+  yield call(worker.request, EVAL_WORKER_ACTIONS.CLEAR_CACHE);
 
   return true;
 }
 
 export function* clearEvalPropertyCache(propertyPath: string) {
-  yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE, {
+  yield call(worker.request, EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE, {
     propertyPath,
   });
 }
@@ -237,9 +160,13 @@ export function* clearEvalPropertyCache(propertyPath: string) {
  * @param widgetName
  */
 export function* clearEvalPropertyCacheOfWidget(widgetName: string) {
-  yield worker.request(EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE_OF_WIDGET, {
-    widgetName,
-  });
+  yield call(
+    worker.request,
+    EVAL_WORKER_ACTIONS.CLEAR_PROPERTY_CACHE_OF_WIDGET,
+    {
+      widgetName,
+    },
+  );
 }
 
 export function* validateProperty(
@@ -248,7 +175,7 @@ export function* validateProperty(
   value: any,
   props: WidgetProps,
 ) {
-  return yield worker.request(EVAL_WORKER_ACTIONS.VALIDATE_PROPERTY, {
+  return yield call(worker.request, EVAL_WORKER_ACTIONS.VALIDATE_PROPERTY, {
     widgetType,
     property,
     value,
@@ -295,7 +222,8 @@ const EVALUATE_REDUX_ACTIONS = [
 ];
 
 function* evaluationChangeListenerSaga() {
-  yield fork(worker.init);
+  yield fork(worker.start);
+  widgetTypeConfigMap = WidgetFactory.getWidgetTypeConfigMap();
   yield fork(evaluateTreeSaga);
   while (true) {
     const action: EvaluationReduxAction<unknown | unknown[]> = yield take(
